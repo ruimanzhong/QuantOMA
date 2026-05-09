@@ -1,0 +1,135 @@
+a_share:
+  provider: "efinance"
+  fallback_provider: "baostock"
+  symbols:
+    - "510300.SH"
+    - "510050.SH"
+    - "510500.SH"
+    - "159915.SZ"
+    - "588000.SH"
+    - "518880.SH"
+  start_date: "2015-01-01"
+  end_date: "2026-04-30"
+  adjust: "qfq"
+
+gold:
+  provider: "local_csv"
+  source_root: "../gold_llm_quant"
+  start_date: "2018-01-01"
+  end_date: null
+  output: "data/raw/gold/gold_daily_series.csv"
+  raw_outputs:
+    market_data: "data/raw/gold/market_data.csv"
+    macro: "data/raw/gold/fred_macro.csv"
+    china_gold_etf: "data/raw/gold/china_gold_etf.csv"
+    sge_gold: "data/raw/gold/sge_gold.csv"
+  market_data:
+    provider: "tiingo"
+    fallback_provider: "yfinance"
+    start_date: "2018-01-01"
+    end_date: null
+    symbols:
+      xauusd:
+        tiingo: "xauusd"
+        yfinance: "GC=F"
+      gld:
+        tiingo: "GLD"
+        yfinance: "GLD"
+      usd_cny:
+        tiingo: "usdcny"
+        yfinance: "USDCNY=X"
+      usd_cnh:
+        tiingo: "usdcnh"
+        yfinance: "USDCNH=X"
+    tiingo:
+      api_key_env: "TIINGO_API_KEY"
+      base_url: "https://api.tiingo.com"
+      price_endpoint: "/tiingo/daily/{ticker}/prices"
+      fx_endpoint: "/tiingo/fx/{ticker}/prices"
+  macro_data:
+    provider: "fred"
+    api_key_env: "FRED_API_KEY"
+    start_date: "2018-01-01"
+    end_date: null
+    fill_method: "ffill"
+    symbols:
+      dxy: "DTWEXBGS"
+      sp500: "SP500"
+      vix: "VIXCLS"
+      oil: "DCOILWTICO"
+      treasury_10y: "DGS10"
+      tips_10y: "DFII10"
+  china_gold_data:
+    etf_provider: "efinance"
+    start_date: "2018-01-01"
+    end_date: null
+    etf_symbols:
+      - "518880.SH"
+      - "159934.SZ"
+      - "518800.SH"
+    sge_provider: "akshare"
+    sge_symbol: "Au99.99"
+  inputs:
+    market_data:
+      path: "data/raw/gold/market_data.csv"
+      type: "ohlcv_long"
+      value_columns: ["close"]
+    china_gold_etf:
+      path: "data/raw/gold/china_gold_etf.csv"
+      type: "ohlcv_long"
+      value_columns: ["close", "volume"]
+    sge_gold:
+      path: "data/raw/gold/sge_gold.csv"
+      type: "series_long"
+      symbol_column: "sge_symbol"
+      value_columns: ["sge_gold_cny_per_g"]
+    macro:
+      path: "data/raw/gold/fred_macro.csv"
+      type: "macro_wide"
+      value_columns: ["dxy", "sp500", "vix", "oil", "treasury_10y", "tips_10y"]
+  news:
+    enabled: true
+    output: "data/raw/gold/news.csv"
+    max_articles_per_day: 80
+    sources:
+      - name: "fed_monetary_policy"
+        url: "https://www.federalreserve.gov/feeds/press_monetary.xml"
+        type: "rss"
+      - name: "fed_speeches"
+        url: "https://www.federalreserve.gov/feeds/speeches.xml"
+        type: "rss"
+      - name: "investing_commodities_futures_news"
+        url: "https://www.investing.com/rss/news_11.rss"
+        type: "rss"
+      - name: "investing_forex_news"
+        url: "https://www.investing.com/rss/news_1.rss"
+        type: "rss"
+      - name: "investing_economic_indicators"
+        url: "https://www.investing.com/rss/news_14.rss"
+        type: "rss"
+      - name: "investing_central_banks"
+        url: "https://www.investing.com/rss/central_banks.rss"
+        type: "rss"
+  polymarket:
+    enabled: true
+    base_url: "https://gamma-api.polymarket.com"
+    output: "data/raw/gold/polymarket_markets.csv"
+    max_markets_per_group: 5
+    min_volume: 1000
+    timeout: 20
+    queries:
+      - market_group: "fed_rate_cut"
+        query: "Fed rate cut 2026"
+        probability_side: "Yes"
+      - market_group: "us_recession"
+        query: "US recession 2026"
+        probability_side: "Yes"
+      - market_group: "geopolitical_risk"
+        query: "war conflict 2026"
+        probability_side: "Yes"
+      - market_group: "tariff_trade_risk"
+        query: "tariff trade war 2026"
+        probability_side: "Yes"
+      - market_group: "gold_upside"
+        query: "gold price 2026"
+        probability_side: "Yes"

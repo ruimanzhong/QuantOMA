@@ -1,0 +1,14 @@
+phase_1:
+  description: "A-share/ETF data, Qlib Alpha158 provider adapter, rule baselines, benchmark and diagnostics scaffold."
+  data_source: "a_share"
+  feature_set: "alpha158"
+  strategies:
+    - "momentum_20d"
+    - "momentum_60d"
+    - "dual_momentum_20_60"
+    - "ma_trend"
+    - "donchian_breakout_20d"
+    - "donchian_breakout_60d"
+    - "support_pullback_trend"
+    - "volume_confirmed_breakout"
+    - "rule_core_vote"

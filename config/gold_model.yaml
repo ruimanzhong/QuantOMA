@@ -1,0 +1,152 @@
+input:
+  daily_series: "data/raw/gold/gold_daily_series.csv"
+  alpha158: "data/features/gold/gold_alpha158_features.parquet"
+  news_events: "data/raw/gold/news_events.csv"
+  polymarket: "data/raw/gold/polymarket_markets.csv"
+
+features:
+  primary_etf_series: "518880_close"
+  primary_alpha158_asset_id: "518880"
+  include_alpha158: true
+  horizon_days: 5
+  return_threshold: 0.0
+  position_full_return_threshold: 0.02
+  target_price_time: "daily_close_proxy_for_bj_22:00"
+  feature_lag_rows: 1
+  no_lag_feature_prefixes:
+    - "external_gap_"
+    - "primary_trading_gap_"
+    - "news_"
+    - "fed_dovish"
+    - "geopolitical_risk"
+    - "fiscal_risk"
+    - "usd_pressure"
+    - "inflation_risk"
+    - "central_bank_buying_news"
+    - "liquidity_stress_news"
+    - "fed_rate_cut_probability"
+    - "us_recession_probability"
+    - "geopolitical_risk_probability"
+    - "tariff_trade_risk_probability"
+    - "gold_upside_probability"
+  exclude_live_overlay_from_model_features: true
+  live_overlay_feature_prefixes:
+    - "news_"
+    - "fed_dovish"
+    - "geopolitical_risk_score"
+    - "fiscal_risk_score"
+    - "usd_pressure"
+    - "inflation_risk"
+    - "central_bank_buying_news"
+    - "liquidity_stress_news"
+  live_overlay_probability_patterns:
+    - "_probability_level"
+    - "_probability_change_"
+  price_windows: [1, 5, 10, 20, 60]
+  volatility_windows: [5, 20, 60]
+  fx_windows: [1, 5, 20]
+  required_features:
+    - "xauusd_return_1d"
+    - "dxy_return"
+    - "real_yield_10y_level"
+    - "vix_level"
+
+model:
+  name: "catboost"
+  parameters:
+    iterations: 300
+    learning_rate: 0.03
+    depth: 4
+    l2_leaf_reg: 6.0
+    random_state: 42
+    verbose: false
+    allow_writing_files: false
+
+feature_selection:
+  enabled: true
+  alpha_prefix: "alpha158_"
+  max_alpha_features: 20
+  min_abs_ic: 0.03
+  max_missing_rate: 0.30
+  orthogonalization:
+    enabled: true
+    alpha_prefix: "alpha158_"
+    suffix: "_orth"
+    keep_original: false
+    ridge: 0.000001
+    risk_features:
+      - "dxy_return"
+      - "dxy_return_5d"
+      - "dxy_trend_20d"
+      - "vix_level"
+      - "vix_change_5d"
+      - "vix_trend_20d"
+      - "real_yield_10y_level"
+      - "real_yield_10y_change"
+      - "real_yield_trend_20d"
+      - "yield_10y_change"
+      - "sp500_return_20d"
+      - "sp500_trend_20d"
+      - "xauusd_volatility_20d"
+  correlation_clustering:
+    enabled: true
+    max_abs_spearman: 0.88
+    max_features: 180
+
+walk_forward:
+  initial_train_size: 504
+  test_size: 63
+  step_size: 63
+  min_train_samples: 400
+  min_test_samples: 20
+  calibration:
+    method: "platt"
+    size: 126
+    min_fit_samples: 400
+
+sizing:
+  strategy_type: "sigmoid_bet_sizing"
+  base_position: 0.10
+  sigmoid_threshold: 0.55
+  sigmoid_sigma: 0.08
+  volatility_targeting: true
+  target_volatility: 0.18
+  volatility_window: 20
+  floor_multiplier: 0.25
+
+regime:
+  hmm_prior:
+    enabled: true
+    transition_stickiness: 0.94
+    base_position_floor: 0.10
+    crisis_position_scale: 0.50
+
+live_overlay:
+  enabled: true
+  min_multiplier: 0.50
+  polymarket:
+    enabled: true
+    high_risk_threshold: 0.60
+    extreme_risk_threshold: 0.75
+    high_risk_multiplier: 0.85
+    extreme_risk_multiplier: 0.70
+    gold_upside_support_threshold: 0.70
+    gold_upside_floor_multiplier: 0.90
+  news:
+    enabled: true
+    bearish_spread_threshold: 0.30
+    bearish_multiplier: 0.85
+
+backtest:
+  signal_threshold: 0.55
+  transaction_cost_bps: 2.0
+
+output:
+  dataset: "data/features/gold/gold_model_dataset.csv"
+  feature_columns: "data/features/gold/gold_model_features.txt"
+  predictions: "data/predictions/gold_model_walk_forward_predictions.csv"
+  fold_metrics: "data/reports/gold_model_walk_forward_fold_metrics.csv"
+  selected_features: "data/reports/gold_alpha158_selected_features.csv"
+  model_summary: "data/reports/gold_model_summary.json"
+  backtest: "data/backtest/gold_model_backtest.csv"
+  backtest_metrics: "data/reports/gold_model_backtest_metrics.json"

@@ -1,0 +1,75 @@
+llm:
+  provider: "openai_compatible"
+  model: "deepseek-v4-pro"
+  api_key_env: "LLM_DS_OFFICIAL_API_KEY"
+  base_url: "https://api.deepseek.com"
+  temperature: 0.0
+  mock_mode: false
+  max_concurrency: 5
+  request_timeout_seconds: 30
+  max_retries: 2
+  env_files:
+    - ".env"
+    - "../gold_llm_quant/.env"
+
+input:
+  raw_news: "data/raw/gold/news.csv"
+  output_events: "data/raw/gold/news_events.csv"
+
+event_types:
+  - fed
+  - inflation
+  - usd
+  - real_yield
+  - geopolitics
+  - central_bank_buying
+  - fiscal_risk
+  - recession
+  - tariff
+  - market_stress
+  - other
+
+system_prompt: |
+  You are a financial event extraction engine.
+  Convert news into structured event factors for gold price modeling.
+  Do not provide trading advice or buy/sell recommendations.
+  Output only valid JSON following the requested schema.
+  When only a title or short summary is available, infer a cautious weak signal from the event category and wording instead of defaulting to neutral.
+  Use neutral only when the item is clearly operational, unrelated to macro conditions, or impossible to map to gold drivers.
+
+event_extraction_prompt: |
+  Read the following news title and short text.
+  Judge its likely impact on gold through channels such as real yields, USD, safe-haven demand, inflation expectations, liquidity, central bank buying, fiscal risk, and geopolitical risk.
+  If the text is brief, classify the directional prior implied by the title:
+  - Dovish Fed, rate-cut, weaker growth, financial stress, geopolitical risk, inflation risk, or central-bank buying tends to be bullish for gold.
+  - Hawkish Fed, higher-for-longer rates, stronger USD, easing stress, or disinflation with firm growth tends to be bearish for gold.
+  - Routine minutes/statements without stance details can be neutral with low surprise.
+  Keep confidence lower when the article has little detail, but still separate weak bullish/bearish priors from truly neutral items.
+
+  Title: {title}
+  Text: {summary}
+
+schema_instruction: |
+  Output valid JSON with:
+  - event_type: one configured event type
+  - gold_direction: bullish | bearish | neutral
+  - confidence: 0.0 to 1.0
+  - surprise: 0.0 to 1.0
+  - surprise should be 0.0 only for truly scheduled/routine items with no new information; otherwise use at least 0.1 for weak signals
+  - time_horizon: intraday | 1d | 1w | 1m
+  - affected_channels: array of strings
+  - llm_summary: concise summary of the event, not the full article
+  - rationale: concise reason for the gold impact classification
+
+few_shot_examples:
+  - title: "Fed signals slower pace of hikes as inflation cools"
+    summary: "Officials noted easing price pressure and tighter credit conditions."
+    output:
+      event_type: "fed"
+      gold_direction: "bullish"
+      confidence: 0.73
+      surprise: 0.45
+      time_horizon: "1w"
+      affected_channels: ["real_yield", "usd"]
+      llm_summary: "Fed communication points to a less restrictive policy path as inflation cools."
+      rationale: "Dovish Fed language may lower real yields and weaken USD, both supportive for gold."

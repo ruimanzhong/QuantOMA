@@ -1,0 +1,1 @@
+"""Independent gold research pipeline."""

@@ -1,0 +1,13 @@
+transaction_cost_bps: 2.0
+
+rule_core:
+  vote_threshold: 0.5
+
+support_pullback:
+  ma_window: 20
+  trend_window: 60
+  pullback_threshold: 0.015
+
+volume_confirmed_breakout:
+  breakout_window: 20
+  volume_zscore_threshold: 1.0

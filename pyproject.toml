@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hybrid-market-quant"
+version = "0.1.0"
+description = "Phase 1 quant research scaffold for A-share/ETF data, Qlib Alpha158 features, rule baselines, and diagnostics."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.24",
+  "pandas>=2.0",
+  "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+data = ["baostock>=0.8.9", "efinance>=0.5.3"]
+qlib = ["pyqlib>=0.9.0"]
+parquet = ["pyarrow>=14.0"]
+dev = ["pytest>=7.4"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
