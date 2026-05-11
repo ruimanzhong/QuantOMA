@@ -128,6 +128,14 @@ def build_qlib_alpha158_features(
             "Prepare Qlib data first or update config/feature_sets.yaml."
         )
     qlib.init(provider_uri=str(resolved_provider_uri), region=REG_CN)
+    infer_processors = []
+    learn_processors = []
+    if normalize:
+        infer_processors = [
+            {"class": "RobustZScoreNorm", "kwargs": {"fields_group": "feature", "clip_outlier": True}},
+            {"class": "Fillna", "kwargs": {"fields_group": "feature"}},
+        ]
+        learn_processors = infer_processors
 
     handler = Alpha158(
         instruments=instruments,
@@ -136,8 +144,8 @@ def build_qlib_alpha158_features(
         fit_start_time=fit_start_time or start_time,
         fit_end_time=fit_end_time or end_time,
         freq=freq,
-        infer_processors=[] if not normalize else None,
-        learn_processors=[] if not normalize else None,
+        infer_processors=infer_processors,
+        learn_processors=learn_processors,
     )
     out = _flatten_qlib_frame(_handler_to_frame(handler))
     _save_features(out, output_path)

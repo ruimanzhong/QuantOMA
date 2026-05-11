@@ -7,10 +7,11 @@ from typing import Any
 import pandas as pd
 
 from market_quant.data.efinance_data import fetch_efinance_daily
+from market_quant.data.network_proxy import scoped_proxy_environment
 
 
 CHINA_OHLCV_COLUMNS = ["date", "symbol", "open", "high", "low", "close", "volume"]
-SGE_COLUMNS = ["date", "sge_symbol", "sge_gold_cny_per_g"]
+SGE_COLUMNS = ["date", "sge_symbol", "sge_gold_cny_per_g", "open", "high", "low", "close"]
 
 
 def fetch_china_gold_etfs(config: dict[str, Any]) -> pd.DataFrame:
@@ -19,13 +20,14 @@ def fetch_china_gold_etfs(config: dict[str, Any]) -> pd.DataFrame:
         return pd.DataFrame(columns=CHINA_OHLCV_COLUMNS)
     start = config["start_date"]
     end = config.get("end_date") or pd.Timestamp.today().strftime("%Y-%m-%d")
-    try:
-        df = fetch_efinance_daily(symbols, start, end)
-        out = df.rename(columns={"asset_id": "symbol"}).copy()
-        return out[CHINA_OHLCV_COLUMNS].sort_values(["symbol", "date"])
-    except Exception as exc:
-        print(f"warning: efinance China gold ETF fetch failed: {exc}; trying AkShare")
-    return fetch_china_gold_etfs_akshare(symbols, start, end)
+    with scoped_proxy_environment(config.get("network"), label="china_gold_etf"):
+        try:
+            df = fetch_efinance_daily(symbols, start, end)
+            out = df.rename(columns={"asset_id": "symbol"}).copy()
+            return out[CHINA_OHLCV_COLUMNS].sort_values(["symbol", "date"])
+        except Exception as exc:
+            print(f"warning: efinance China gold ETF fetch failed: {exc}; trying AkShare")
+        return fetch_china_gold_etfs_akshare(symbols, start, end)
 
 
 def fetch_china_gold_etfs_akshare(symbols: list[str], start_date: str, end_date: str) -> pd.DataFrame:
@@ -108,35 +110,40 @@ def fetch_sge_gold(config: dict[str, Any]) -> pd.DataFrame:
         ("macro_china_shgold", {}),
     ]
     errors = []
-    for func_name, kwargs in candidates:
-        func = getattr(ak, func_name, None)
-        if func is None:
-            continue
-        try:
-            raw = func(**kwargs)
-            if raw is None or raw.empty:
-                errors.append(f"{func_name}: empty")
+    with scoped_proxy_environment(config.get("network"), label="sge_gold"):
+        for func_name, kwargs in candidates:
+            func = getattr(ak, func_name, None)
+            if func is None:
                 continue
-            out = _normalize_akshare_columns(raw)
-            if "品种" in out.columns:
-                out = out[out["品种"].astype(str).str.contains(symbol, case=False, regex=False)]
-            if "close" not in out.columns:
-                numeric_cols = [col for col in out.columns if col != "date" and pd.to_numeric(out[col], errors="coerce").notna().any()]
-                if not numeric_cols:
-                    errors.append(f"{func_name}: no numeric price column")
+            try:
+                raw = func(**kwargs)
+                if raw is None or raw.empty:
+                    errors.append(f"{func_name}: empty")
                     continue
-                out["close"] = pd.to_numeric(out[numeric_cols[0]], errors="coerce")
-            result = pd.DataFrame(
-                {
-                    "date": out["date"],
-                    "sge_symbol": symbol,
-                    "sge_gold_cny_per_g": pd.to_numeric(out["close"], errors="coerce"),
-                }
-            )
-            result = result[(result["date"] >= start) & (result["date"] <= end)]
-            result = result.dropna(subset=["sge_gold_cny_per_g"]).drop_duplicates("date")
-            if not result.empty:
-                return result[SGE_COLUMNS].sort_values("date")
-        except Exception as exc:
-            errors.append(f"{func_name}: {exc}")
+                out = _normalize_akshare_columns(raw)
+                if "品种" in out.columns:
+                    out = out[out["品种"].astype(str).str.contains(symbol, case=False, regex=False)]
+                if "close" not in out.columns:
+                    numeric_cols = [col for col in out.columns if col != "date" and pd.to_numeric(out[col], errors="coerce").notna().any()]
+                    if not numeric_cols:
+                        errors.append(f"{func_name}: no numeric price column")
+                        continue
+                    out["close"] = pd.to_numeric(out[numeric_cols[0]], errors="coerce")
+                result = pd.DataFrame(
+                    {
+                        "date": out["date"],
+                        "sge_symbol": symbol,
+                        "sge_gold_cny_per_g": pd.to_numeric(out["close"], errors="coerce"),
+                        "open": pd.to_numeric(out["open"], errors="coerce") if "open" in out else pd.NA,
+                        "high": pd.to_numeric(out["high"], errors="coerce") if "high" in out else pd.NA,
+                        "low": pd.to_numeric(out["low"], errors="coerce") if "low" in out else pd.NA,
+                        "close": pd.to_numeric(out["close"], errors="coerce"),
+                    }
+                )
+                result = result[(result["date"] >= start) & (result["date"] <= end)]
+                result = result.dropna(subset=["sge_gold_cny_per_g"]).drop_duplicates("date")
+                if not result.empty:
+                    return result[SGE_COLUMNS].sort_values("date")
+            except Exception as exc:
+                errors.append(f"{func_name}: {exc}")
     raise RuntimeError(f"No supported AkShare SGE function succeeded. Tried: {errors}")

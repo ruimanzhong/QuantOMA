@@ -11,7 +11,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def load_script(name: str):
-    path = PROJECT_ROOT / "scripts" / name
+    script_dirs = {
+        "run_rule_parameter_sensitivity.py": "strategies",
+        "run_transaction_cost_sensitivity.py": "backtests",
+        "summarize_rule_robustness.py": "diagnostics",
+    }
+    path = PROJECT_ROOT / "scripts" / script_dirs[name] / name
     spec = importlib.util.spec_from_file_location(name.replace(".py", "_test_module"), path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

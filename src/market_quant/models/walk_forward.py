@@ -8,6 +8,12 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from market_quant.features.orthogonalization import (
+    apply_orthogonalization_model,
+    fit_orthogonalization_model,
+    orthogonalize_training_frames,
+)
+
 
 @dataclass(frozen=True)
 class WalkForwardResult:
@@ -17,15 +23,42 @@ class WalkForwardResult:
     selected_features: pd.DataFrame
 
 
-@dataclass(frozen=True)
-class OrthogonalizationModel:
-    alpha_columns: list[str]
-    risk_columns: list[str]
-    coefficients: dict[str, np.ndarray]
-    risk_means: pd.Series
-    risk_stds: pd.Series
-    alpha_means: pd.Series
-    alpha_stds: pd.Series
+class _SimpleLogisticClassifier:
+    """Small sklearn-free logistic classifier fallback for lightweight runs."""
+
+    def __init__(self, learning_rate: float = 0.1, max_iter: int = 1000, l2: float = 1e-4):
+        self.learning_rate = learning_rate
+        self.max_iter = max_iter
+        self.l2 = l2
+
+    def fit(self, x: pd.DataFrame | np.ndarray, y: pd.Series | np.ndarray):
+        x_arr = np.asarray(x, dtype=float)
+        y_arr = np.asarray(y, dtype=float)
+        self.mean_ = x_arr.mean(axis=0)
+        self.scale_ = x_arr.std(axis=0)
+        self.scale_[self.scale_ == 0] = 1.0
+        xs = (x_arr - self.mean_) / self.scale_
+        self.coef_ = np.zeros(xs.shape[1], dtype=float)
+        self.intercept_ = float(np.log(np.clip(y_arr.mean(), 1e-4, 1 - 1e-4) / np.clip(1 - y_arr.mean(), 1e-4, 1 - 1e-4)))
+        for _ in range(self.max_iter):
+            score = xs @ self.coef_ + self.intercept_
+            pred = 1.0 / (1.0 + np.exp(-np.clip(score, -40, 40)))
+            err = pred - y_arr
+            self.coef_ -= self.learning_rate * ((xs.T @ err) / len(xs) + self.l2 * self.coef_)
+            self.intercept_ -= self.learning_rate * float(err.mean())
+        return self
+
+    def predict_proba(self, x: pd.DataFrame | np.ndarray) -> np.ndarray:
+        x_arr = np.asarray(x, dtype=float)
+        xs = (x_arr - self.mean_) / self.scale_
+        score = xs @ self.coef_ + self.intercept_
+        p1 = 1.0 / (1.0 + np.exp(-np.clip(score, -40, 40)))
+        return np.column_stack([1.0 - p1, p1])
+
+
+class _SimplePlattCalibrator(_SimpleLogisticClassifier):
+    def __init__(self):
+        super().__init__(learning_rate=0.2, max_iter=1000, l2=1e-4)
 
 
 def make_purged_walk_forward_folds(
@@ -105,11 +138,18 @@ def make_classifier(model_name: str, parameters: dict[str, Any] | None = None):
                 random_state=params.get("random_state", 42),
             )
         if model_name == "logistic_regression":
-            from sklearn.linear_model import LogisticRegression
-            from sklearn.pipeline import make_pipeline
-            from sklearn.preprocessing import StandardScaler
-
-            return make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000, random_state=params.get("random_state", 42)))
+            try:
+                from sklearn.linear_model import LogisticRegression
+                from sklearn.pipeline import make_pipeline
+                from sklearn.preprocessing import StandardScaler
+            except ImportError:
+                return _SimpleLogisticClassifier(
+                    learning_rate=params.get("learning_rate", 0.1),
+                    max_iter=params.get("max_iter", 1000),
+                    l2=params.get("l2", 1e-4),
+                )
+            else:
+                return make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000, random_state=params.get("random_state", 42)))
     except ImportError as exc:
         raise ImportError("scikit-learn is required for gold model training. Install with: python -m pip install scikit-learn") from exc
     raise ValueError(f"Unsupported classifier: {model_name}")
@@ -167,9 +207,12 @@ def fit_probability_calibrator(raw_probability: np.ndarray, y: pd.Series | np.nd
     if method in {"none", "off", ""}:
         return None
     if method in {"platt", "sigmoid"}:
-        from sklearn.linear_model import LogisticRegression
-
-        calibrator = LogisticRegression(max_iter=1000)
+        try:
+            from sklearn.linear_model import LogisticRegression
+        except ImportError:
+            calibrator = _SimplePlattCalibrator()
+        else:
+            calibrator = LogisticRegression(max_iter=1000)
         calibrator.fit(x, target)
         return calibrator
     if method == "isotonic":
@@ -206,116 +249,6 @@ def split_train_calibration_index(train_index: pd.Index, calibration_size: int, 
     if calibration_size <= 0 or len(train_index) < min_fit_samples + calibration_size:
         return train_index, pd.Index([])
     return train_index[:-calibration_size], train_index[-calibration_size:]
-
-
-def _safe_standardize(frame: pd.DataFrame, means: pd.Series, stds: pd.Series) -> pd.DataFrame:
-    safe_stds = stds.replace([np.inf, -np.inf], np.nan).replace(0.0, np.nan).fillna(1.0)
-    standardized = (frame.fillna(means).fillna(0.0) - means.fillna(0.0)) / safe_stds
-    return standardized.replace([np.inf, -np.inf], np.nan).fillna(0.0).clip(-8.0, 8.0)
-
-
-def fit_orthogonalization_model(
-    train: pd.DataFrame,
-    alpha_columns: list[str],
-    risk_columns: list[str],
-    ridge: float = 1e-6,
-) -> OrthogonalizationModel:
-    """Fit train-only linear projections that remove macro beta from alpha factors."""
-    alpha_columns = [col for col in alpha_columns if col in train]
-    risk_columns = [col for col in risk_columns if col in train]
-    if not alpha_columns or not risk_columns:
-        return OrthogonalizationModel(
-            alpha_columns,
-            risk_columns,
-            {},
-            pd.Series(dtype=float),
-            pd.Series(dtype=float),
-            pd.Series(dtype=float),
-            pd.Series(dtype=float),
-        )
-    risk = train[risk_columns].apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan)
-    alpha = train[alpha_columns].apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan)
-    risk_means = risk.mean()
-    alpha_means = alpha.mean()
-    risk_stds = risk.std(ddof=0).replace([np.inf, -np.inf], np.nan).replace(0.0, np.nan).fillna(1.0)
-    alpha_stds = alpha.std(ddof=0).replace([np.inf, -np.inf], np.nan).replace(0.0, np.nan).fillna(1.0)
-    risk_z = _safe_standardize(risk, risk_means, risk_stds)
-    alpha_z = _safe_standardize(alpha, alpha_means, alpha_stds)
-    x = risk_z.to_numpy(dtype=float)
-    xtx = x.T @ x + float(ridge) * np.eye(x.shape[1])
-    coefficients: dict[str, np.ndarray] = {}
-    for col in alpha_columns:
-        y = alpha_z[col].to_numpy(dtype=float)
-        rhs = np.einsum("ij,i->j", x, y, optimize=True)
-        try:
-            beta = np.linalg.solve(xtx, rhs)
-        except np.linalg.LinAlgError:
-            beta = np.linalg.pinv(xtx) @ rhs
-        coefficients[col] = np.nan_to_num(beta, nan=0.0, posinf=0.0, neginf=0.0)
-    return OrthogonalizationModel(alpha_columns, risk_columns, coefficients, risk_means, risk_stds, alpha_means, alpha_stds)
-
-
-def apply_orthogonalization_model(df: pd.DataFrame, model: OrthogonalizationModel, suffix: str = "_orth") -> tuple[pd.DataFrame, list[str]]:
-    """Append orthogonalized alpha residual columns using a train-fitted model."""
-    if not model.alpha_columns or not model.risk_columns:
-        return df.copy(), []
-    base = df.copy()
-    risk = base[model.risk_columns].apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan)
-    risk_z = _safe_standardize(risk, model.risk_means, model.risk_stds)
-    x = risk_z.to_numpy(dtype=float)
-    residual_cols = {}
-    created = []
-    for col in model.alpha_columns:
-        if col not in base or col not in model.coefficients:
-            continue
-        alpha = pd.to_numeric(base[col], errors="coerce").replace([np.inf, -np.inf], np.nan)
-        alpha_frame = alpha.to_frame(name=col)
-        alpha_centered = _safe_standardize(alpha_frame, model.alpha_means[[col]], model.alpha_stds[[col]])[col].to_numpy(dtype=float)
-        projection = np.einsum("ij,j->i", x, model.coefficients[col], optimize=True)
-        residual = alpha_centered - projection
-        residual = np.nan_to_num(residual, nan=0.0, posinf=0.0, neginf=0.0)
-        new_col = f"{col}{suffix}"
-        residual_cols[new_col] = residual
-        created.append(new_col)
-    if not residual_cols:
-        return base, []
-    residual_frame = pd.DataFrame(residual_cols, index=base.index)
-    return pd.concat([base, residual_frame], axis=1), created
-
-
-def orthogonalize_training_frames(
-    train: pd.DataFrame,
-    calibration: pd.DataFrame,
-    test: pd.DataFrame,
-    feature_columns: list[str],
-    config: dict[str, Any] | None,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, list[str], pd.DataFrame]:
-    cfg = config or {}
-    if not cfg.get("enabled", False):
-        return train, calibration, test, feature_columns, pd.DataFrame()
-    alpha_prefix = cfg.get("alpha_prefix", "alpha158_")
-    suffix = cfg.get("suffix", "_orth")
-    alpha_columns = [col for col in feature_columns if col.startswith(alpha_prefix) and not col.endswith(suffix)]
-    risk_columns = [col for col in cfg.get("risk_features", []) if col in feature_columns and col in train]
-    model = fit_orthogonalization_model(train, alpha_columns, risk_columns, ridge=float(cfg.get("ridge", 1e-6)))
-    train_out, created = apply_orthogonalization_model(train, model, suffix=suffix)
-    calibration_out, _ = apply_orthogonalization_model(calibration, model, suffix=suffix) if not calibration.empty else (calibration.copy(), [])
-    test_out, _ = apply_orthogonalization_model(test, model, suffix=suffix)
-    keep_original = bool(cfg.get("keep_original", False))
-    if keep_original:
-        feature_out = feature_columns + [col for col in created if col not in feature_columns]
-    else:
-        feature_out = [col for col in feature_columns if col not in model.alpha_columns] + created
-    report = pd.DataFrame(
-        {
-            "feature": model.alpha_columns,
-            "orthogonalized_feature": [f"{col}{suffix}" for col in model.alpha_columns],
-            "n_risk_features": len(model.risk_columns),
-            "selection_stage": "gram_schmidt_orthogonalization",
-            "selected": True,
-        }
-    )
-    return train_out, calibration_out, test_out, feature_out, report
 
 
 def select_alpha158_features_by_train_ic(

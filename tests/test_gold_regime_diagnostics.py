@@ -15,7 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def load_script(name: str):
-    path = PROJECT_ROOT / "scripts" / name
+    path = PROJECT_ROOT / "scripts" / "diagnostics" / name
     spec = importlib.util.spec_from_file_location(name.replace(".py", "_test_module"), path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

@@ -77,6 +77,49 @@ def append_preopen_primary_row(
     return pd.concat([out, pd.DataFrame([template])], ignore_index=True)
 
 
+def append_manual_primary_price_row(
+    daily_series: pd.DataFrame,
+    primary_series_id: str,
+    signal_date: str | pd.Timestamp,
+    price: float,
+    source: str = "manual_primary_price",
+) -> pd.DataFrame:
+    """Append or replace the primary ETF price for a live decision date.
+
+    This is intended for near-close execution: the user can provide a price
+    close to the official close before the final exchange close is available.
+    The override is in-memory for prediction and does not mutate raw CSVs.
+    """
+    required = {"date", "series_id", "value"}
+    missing = required.difference(daily_series.columns)
+    if missing:
+        raise ValueError(f"daily series missing columns: {sorted(missing)}")
+    if price <= 0:
+        raise ValueError("manual primary price must be positive")
+
+    signal_ts = pd.Timestamp(signal_date).normalize()
+    out = daily_series.copy()
+    out["date"] = pd.to_datetime(out["date"]).dt.normalize()
+    mask = out["date"].eq(signal_ts) & out["series_id"].eq(primary_series_id)
+
+    if mask.any():
+        out.loc[mask, "value"] = float(price)
+        if "source" in out.columns:
+            out.loc[mask, "source"] = source
+        return out
+
+    template = {col: np.nan for col in out.columns}
+    template.update(
+        {
+            "date": signal_ts,
+            "series_id": primary_series_id,
+            "value": float(price),
+            "source": source,
+        }
+    )
+    return pd.concat([out, pd.DataFrame([template])], ignore_index=True)
+
+
 def add_price_features(close: pd.Series, prefix: str, windows: list[int], volatility_windows: list[int]) -> pd.DataFrame:
     px = close.astype(float).sort_index()
     out = pd.DataFrame(index=px.index)
@@ -248,7 +291,7 @@ def load_optional_feature_csv(path: str | Path | None) -> pd.DataFrame:
 
 
 def load_alpha158_features(path: str | Path | None, asset_id: str) -> pd.DataFrame:
-    """Load Alpha158 features for one gold ETF asset and prefix columns."""
+    """Load Alpha158 features for one primary gold asset and prefix columns."""
     if path is None:
         return pd.DataFrame()
     target = Path(path).expanduser()

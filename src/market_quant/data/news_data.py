@@ -119,6 +119,25 @@ def fetch_gold_news(news_config: dict[str, Any]) -> pd.DataFrame:
     return out.groupby("date", group_keys=False).head(int(news_config.get("max_articles_per_day", 80))).reset_index(drop=True)
 
 
+def merge_news_cache(existing: pd.DataFrame, fetched: pd.DataFrame) -> pd.DataFrame:
+    """Merge newly fetched news with cache without letting empty fetches erase history."""
+    frames = []
+    if existing is not None and not existing.empty:
+        frames.append(existing)
+    if fetched is not None and not fetched.empty:
+        frames.append(fetched)
+    if not frames:
+        return pd.DataFrame(columns=NEWS_COLUMNS)
+    out = pd.concat(frames, ignore_index=True)
+    for column in NEWS_COLUMNS:
+        if column not in out:
+            out[column] = pd.NA
+    out["published_at"] = pd.to_datetime(out["published_at"], errors="coerce")
+    out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.normalize()
+    out = out.drop_duplicates(subset=["source", "title", "published_at"], keep="last")
+    return out[NEWS_COLUMNS].sort_values(["date", "published_at", "source"]).reset_index(drop=True)
+
+
 class _ParagraphExtractor(HTMLParser):
     def __init__(self) -> None:
         super().__init__()

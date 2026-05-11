@@ -5,8 +5,8 @@ input:
   polymarket: "data/raw/gold/polymarket_markets.csv"
 
 features:
-  primary_etf_series: "518880_close"
-  primary_alpha158_asset_id: "518880"
+  primary_etf_series: "au9999_sge_gold_cny_per_g"
+  primary_alpha158_asset_id: "AU9999"
   include_alpha158: true
   horizon_days: 5
   return_threshold: 0.0
@@ -42,6 +42,14 @@ features:
   live_overlay_probability_patterns:
     - "_probability_level"
     - "_probability_change_"
+  raw_feature_exclude_prefixes:
+    - "159934_"
+    - "518800_"
+    - "518880_"
+    - "gld_"
+    - "usd_cny_"
+    - "usd_cnh_"
+    - "au9999_"
   price_windows: [1, 5, 10, 20, 60]
   volatility_windows: [5, 20, 60]
   fx_windows: [1, 5, 20]

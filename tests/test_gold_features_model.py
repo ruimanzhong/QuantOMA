@@ -4,6 +4,7 @@ import pytest
 from market_quant.gold.backtest import build_gold_positions, run_gold_long_flat_backtest, run_gold_position_backtest
 from market_quant.gold.features import (
     align_to_primary_trading_calendar,
+    append_manual_primary_price_row,
     append_preopen_primary_row,
     build_external_gap_features,
     build_gold_feature_frame,
@@ -11,11 +12,12 @@ from market_quant.gold.features import (
     build_news_features,
 )
 from market_quant.gold.live_signal import build_live_gold_signal
+from market_quant.gold.live_pipeline import build_execution_plan, filter_as_of, infer_overlay_as_of_date
 from market_quant.diagnostics.gold_pipeline_audit import audit_gold_dataset
+from market_quant.features.orthogonalization import apply_orthogonalization_model
+from market_quant.features.orthogonalization import fit_orthogonalization_model
 from market_quant.models.walk_forward import make_purged_walk_forward_folds
 from market_quant.models.walk_forward import fit_probability_calibrator
-from market_quant.models.walk_forward import fit_orthogonalization_model
-from market_quant.models.walk_forward import apply_orthogonalization_model
 from market_quant.models.walk_forward import select_alpha158_features_by_train_ic
 from market_quant.models.walk_forward import select_features_by_correlation_clusters
 
@@ -108,6 +110,40 @@ def test_append_preopen_primary_row_uses_last_known_close():
     assert row["source"] == "synthetic_preopen_last_close"
 
 
+def test_append_manual_primary_price_row_replaces_existing_price():
+    series = pd.DataFrame(
+        {
+            "date": ["2024-01-02", "2024-01-02"],
+            "series_id": ["518880_close", "xauusd_close"],
+            "value": [1.0, 2040.0],
+            "source": ["official", "test"],
+        }
+    )
+
+    out = append_manual_primary_price_row(series, "518880_close", "2024-01-02", 1.03)
+
+    row = out[pd.to_datetime(out["date"]).eq(pd.Timestamp("2024-01-02")) & out["series_id"].eq("518880_close")].iloc[0]
+    assert row["value"] == 1.03
+    assert row["source"] == "manual_primary_price"
+
+
+def test_append_manual_primary_price_row_adds_new_signal_date():
+    series = pd.DataFrame(
+        {
+            "date": ["2024-01-02"],
+            "series_id": ["518880_close"],
+            "value": [1.0],
+            "source": ["official"],
+        }
+    )
+
+    out = append_manual_primary_price_row(series, "518880_close", "2024-01-03", 1.02)
+
+    row = out[pd.to_datetime(out["date"]).eq(pd.Timestamp("2024-01-03")) & out["series_id"].eq("518880_close")].iloc[0]
+    assert row["value"] == 1.02
+    assert row["source"] == "manual_primary_price"
+
+
 def test_build_gold_dataset_keeps_external_gap_features_unlagged():
     dates = pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05", "2024-01-08", "2024-01-09", "2024-01-10"])
     values = {
@@ -193,6 +229,32 @@ def test_live_gold_signal_converts_probability_to_position():
     assert 0.0 <= signal.sigmoid_position <= 1.0
     assert 0.0 <= signal.final_position <= 1.0
     assert signal.feature_date == pd.Timestamp("2024-04-22")
+
+
+def test_live_pipeline_infers_latest_overlay_date():
+    news = pd.DataFrame({"published_at": ["2024-01-01", "2024-01-03"]})
+    polymarket = pd.DataFrame({"timestamp": ["2024-01-02 12:00:00"]})
+
+    assert infer_overlay_as_of_date(news, polymarket, None) == pd.Timestamp("2024-01-03")
+    assert infer_overlay_as_of_date(news, polymarket, "2024-01-02") == pd.Timestamp("2024-01-02")
+
+
+def test_live_pipeline_filters_overlay_as_of_inclusive_date():
+    df = pd.DataFrame({"published_at": ["2024-01-02 23:59:59", "2024-01-03 00:00:00"], "value": [1, 2]})
+
+    out = filter_as_of(df, ["published_at"], "2024-01-02")
+
+    assert out["value"].tolist() == [1]
+
+
+def test_build_execution_plan_applies_band_and_max_change():
+    hold = build_execution_plan(0.62, current_position=0.60, rebalance_band=0.05, max_position_change=0.35)
+    increase = build_execution_plan(0.90, current_position=0.20, rebalance_band=0.05, max_position_change=0.35)
+
+    assert hold["action"] == "hold"
+    assert hold["recommended_position"] == 0.60
+    assert increase["action"] == "increase"
+    assert increase["recommended_position"] == pytest.approx(0.55)
 
 
 def test_orthogonalization_removes_linear_macro_beta():

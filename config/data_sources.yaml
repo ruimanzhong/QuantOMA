@@ -69,6 +69,31 @@ gold:
       - "518800.SH"
     sge_provider: "akshare"
     sge_symbol: "Au99.99"
+    network:
+      proxy:
+        enabled: false
+        proxy_env: "CHINA_DATA_PROXY"
+        http_proxy_env: "CHINA_DATA_HTTP_PROXY"
+        https_proxy_env: "CHINA_DATA_HTTPS_PROXY"
+        all_proxy_env: "CHINA_DATA_ALL_PROXY"
+        no_proxy: "localhost,127.0.0.1,::1"
+      whitelist_domains:
+        - "push2his.eastmoney.com"
+        - "push2.eastmoney.com"
+        - "quote.eastmoney.com"
+        - "datacenter-web.eastmoney.com"
+        - "www.sge.com.cn"
+        - "query.sse.com.cn"
+        - "www.szse.cn"
+  night_session:
+    enabled: true
+    provider: "akshare"
+    sge_symbol: "Au99.99"
+    timezone: "Asia/Shanghai"
+    decision_time: "23:00"
+    tolerance_minutes: 10
+    intraday_output: "data/raw/gold/sge_au9999_intraday.csv"
+    decision_output: "data/raw/gold/au9999_night_decision_prices.csv"
   inputs:
     market_data:
       path: "data/raw/gold/market_data.csv"

@@ -46,7 +46,7 @@ BaoStock is kept as `fallback_provider` and can still be selected explicitly in 
 The efinance price adjustment and Eastmoney data口径 should be independently verified before production research. All provider outputs must pass the coverage check:
 
 ```bash
-python scripts/check_data_coverage.py
+python scripts/diagnostics/check_data_coverage.py
 ```
 
 Do not use the 76-row BaoStock ETF smoke-test output for strategy conclusions.
@@ -56,27 +56,27 @@ Do not use the 76-row BaoStock ETF smoke-test output for strategy conclusions.
 Fetch A-share ETF daily data:
 
 ```bash
-python scripts/fetch_a_share_data.py
-python scripts/check_data_coverage.py
+python scripts/data/fetch_a_share_data.py
+python scripts/diagnostics/check_data_coverage.py
 ```
 
 Build Qlib Alpha158 features:
 
 ```bash
-python scripts/build_qlib_alpha158_features.py
+python scripts/features/build_qlib_alpha158_features.py
 ```
 
 Run rule baselines:
 
 ```bash
-python scripts/run_rule_baselines.py
+python scripts/strategies/run_rule_baselines.py
 ```
 
 Evaluate rule baselines against buy-and-hold:
 
 ```bash
-python scripts/evaluate_rule_baselines.py
-python scripts/compare_benchmarks.py
+python scripts/strategies/evaluate_rule_baselines.py
+python scripts/strategies/compare_benchmarks.py
 ```
 
 Outputs:
@@ -100,9 +100,9 @@ The evaluation reports compare cumulative return, Sharpe, max drawdown, active r
 Run:
 
 ```bash
-python scripts/run_rule_baselines.py
-python scripts/evaluate_rule_baselines.py
-python scripts/compare_benchmarks.py
+python scripts/strategies/run_rule_baselines.py
+python scripts/strategies/evaluate_rule_baselines.py
+python scripts/strategies/compare_benchmarks.py
 ```
 
 Outputs:
@@ -123,11 +123,11 @@ Robustness diagnostics split results by calendar year and fixed subperiods, then
 Run:
 
 ```bash
-python scripts/diagnose_rule_annual_performance.py
-python scripts/diagnose_rule_subperiod_performance.py
-python scripts/run_rule_parameter_sensitivity.py
-python scripts/run_transaction_cost_sensitivity.py
-python scripts/summarize_rule_robustness.py
+python scripts/diagnostics/diagnose_rule_annual_performance.py
+python scripts/diagnostics/diagnose_rule_subperiod_performance.py
+python scripts/strategies/run_rule_parameter_sensitivity.py
+python scripts/backtests/run_transaction_cost_sensitivity.py
+python scripts/diagnostics/summarize_rule_robustness.py
 ```
 
 Outputs:
@@ -149,9 +149,9 @@ Phase 1 does not train LightGBM, transformers, or any deep model. The goal here 
 Run:
 
 ```bash
-python scripts/inspect_qlib_provider.py
-python scripts/build_qlib_alpha158_features.py
-python scripts/diagnose_alpha158_features.py
+python scripts/diagnostics/inspect_qlib_provider.py
+python scripts/features/build_qlib_alpha158_features.py
+python scripts/diagnostics/diagnose_alpha158_features.py
 ```
 
 Outputs:
@@ -183,16 +183,16 @@ This path is useful when an installed Qlib `cn_data` provider ends early, for ex
 Run the Phase 1.1 Alpha158 gate:
 
 ```bash
-python scripts/run_phase11_alpha158_verification.py
+python scripts/verification/run_phase11_alpha158_verification.py
 ```
 
 Or run the steps manually:
 
 ```bash
-python scripts/build_etf_qlib_provider.py
-python scripts/inspect_qlib_provider.py --feature-set alpha158_etf
-python scripts/build_qlib_alpha158_features.py --feature-set alpha158_etf
-python scripts/diagnose_alpha158_features.py --feature-set alpha158_etf
+python scripts/features/build_etf_qlib_provider.py
+python scripts/diagnostics/inspect_qlib_provider.py --feature-set alpha158_etf
+python scripts/features/build_qlib_alpha158_features.py --feature-set alpha158_etf
+python scripts/diagnostics/diagnose_alpha158_features.py --feature-set alpha158_etf
 ```
 
 Outputs:
@@ -219,7 +219,7 @@ This bootstrap does not connect News or Polymarket, does not train LightGBM or d
 Run:
 
 ```bash
-python scripts/fetch_gold_local_series.py
+python scripts/data/fetch_gold_local_series.py
 ```
 
 Outputs:
@@ -237,20 +237,29 @@ The default gold config reads local files from `../gold_llm_quant`:
 Build and evaluate the first independent gold model baseline:
 
 ```bash
-python scripts/process_gold_news_events.py
-python scripts/build_gold_features.py
-python scripts/train_gold_model.py
-python scripts/train_gold_position_model.py
-python scripts/backtest_gold_model.py
-python scripts/backtest_gold_position_model.py
-python scripts/evaluate_gold_model_vs_buy_hold.py
-python scripts/run_gold_strategy_sensitivity.py
-python scripts/run_gold_regime_diagnostics.py
-python scripts/run_gold_layered_strategy.py
-python scripts/audit_gold_long_history_readiness.py
+python scripts/features/process_gold_news_events.py
+python scripts/features/build_gold_features.py
+python scripts/models/train_gold_model.py
+python scripts/models/train_gold_position_model.py
+python scripts/backtests/backtest_gold_model.py
+python scripts/backtests/backtest_gold_position_model.py
+python scripts/backtests/evaluate_gold_model_vs_buy_hold.py
+python scripts/backtests/run_gold_strategy_sensitivity.py
+python scripts/diagnostics/run_gold_regime_diagnostics.py
+python scripts/strategies/run_gold_layered_strategy.py
+python scripts/diagnostics/audit_gold_long_history_readiness.py
 ```
 
 This model uses purged walk-forward validation and a tabular classifier, preferring LightGBM when installed and falling back through the modeling layer only when needed. News and Polymarket inputs are supported as optional local files under `data/raw/gold/`; if those files are absent, the model runs without those feature groups and reports that they were skipped. `process_gold_news_events.py` reads raw article metadata from `data/raw/gold/news.csv`, sends only title and short text to the configured LLM client, and writes structured events to `data/raw/gold/news_events.csv` without retaining raw article text in the event file. For sparse RSS items, use `--enrich-url-text` to fetch a transient URL excerpt for LLM input only; the event output still stores only `llm_summary`, rationale, and structured fields. Regime diagnostics split the same OOS predictions by calendar subperiod and by a prior-close price regime, so the overlay can be evaluated as a regime-aware exposure controller rather than only as an all-weather return enhancer. The layered strategy combines regime score, model probability, execution overlay, and risk limits into one long-only exposure framework.
+
+China gold ETF and SGE fetches can use a scoped proxy without affecting Tiingo, FRED, News, or Polymarket. Set a proxy environment variable, then enable `gold.china_gold_data.network.proxy.enabled` in `config/data_sources.yaml`:
+
+```bash
+export CHINA_DATA_PROXY="socks5://127.0.0.1:1080"
+conda run -n trading python scripts/data/fetch_gold_data.py --skip-market --skip-macro
+```
+
+The configured `whitelist_domains` documents the intended China-data domains for your local proxy tool, while the code only applies proxy environment variables inside the China ETF/SGE fetch scope and restores the previous environment afterward.
 
 Outputs:
 
@@ -288,13 +297,13 @@ pytest
 Recommended one-command Phase 1 verification:
 
 ```bash
-python scripts/run_phase1_verification.py
+python scripts/verification/run_phase1_verification.py
 ```
 
 If local A-share ETF data already exists, skip the data fetch step:
 
 ```bash
-python scripts/run_phase1_verification.py --skip-fetch
+python scripts/verification/run_phase1_verification.py --skip-fetch
 ```
 
 Qlib Alpha158 validation remains a separate manual step because `provider_uri` depends on local Qlib data preparation.
@@ -308,27 +317,27 @@ python -B -m pytest -p no:cacheprovider
 Fetch A-share/ETF data and verify coverage:
 
 ```bash
-python scripts/fetch_a_share_data.py
-python scripts/check_data_coverage.py
+python scripts/data/fetch_a_share_data.py
+python scripts/diagnostics/check_data_coverage.py
 ```
 
 Run rule baselines:
 
 ```bash
-python scripts/run_rule_baselines.py
-python scripts/evaluate_rule_baselines.py
+python scripts/strategies/run_rule_baselines.py
+python scripts/strategies/evaluate_rule_baselines.py
 ```
 
 Diagnose sample attrition:
 
 ```bash
-python scripts/diagnose_sample_attrition.py
+python scripts/diagnostics/diagnose_sample_attrition.py
 ```
 
 Build Qlib Alpha158 features:
 
 ```bash
-python scripts/build_qlib_alpha158_features.py
+python scripts/features/build_qlib_alpha158_features.py
 ```
 
 Common errors:

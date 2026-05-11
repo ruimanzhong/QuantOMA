@@ -33,17 +33,15 @@ alpha158_etf:
 alpha158_gold:
   enabled: true
   provider: "qlib"
-  provider_uri: "data/qlib_data/gold_etf_cn_data"
+  provider_uri: "data/qlib_data/gold_sge_cn_data"
   instruments:
-    - "518880"
-    - "518800"
-    - "159934"
+    - "AU9999"
   start_time: "2018-01-01"
-  end_time: "2026-04-30"
+  end_time: "2026-05-11"
   fit_start_time: "2018-01-01"
-  fit_end_time: "2026-04-30"
+  fit_end_time: "2026-05-11"
   freq: "day"
-  normalize: false
+  normalize: true
   output: "data/features/gold/gold_alpha158_features.parquet"
 
 fallback_alpha_style:

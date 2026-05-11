@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 
-SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "fetch_a_share_data.py"
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "data" / "fetch_a_share_data.py"
 
 
 def load_fetch_module():

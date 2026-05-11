@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import asyncio
 from typing import Any
 
 import pandas as pd
@@ -87,7 +87,19 @@ def extract_event(title: str, summary: str, config: dict[str, Any], client: LLMC
     return GoldNewsEvent.from_mapping(data, allowed)
 
 
+async def extract_event_async(title: str, summary: str, config: dict[str, Any], client: LLMClient) -> GoldNewsEvent:
+    allowed = set(config.get("event_types", [])) or None
+    if client.mock_mode:
+        return mock_extract_event(title, summary, allowed)
+    data = await client.chat_json_async(build_event_messages(config, title, summary))
+    return GoldNewsEvent.from_mapping(data, allowed)
+
+
 def extract_news_events(news: pd.DataFrame, config: dict[str, Any], client: LLMClient) -> pd.DataFrame:
+    return asyncio.run(extract_news_events_async(news, config, client))
+
+
+async def extract_news_events_async(news: pd.DataFrame, config: dict[str, Any], client: LLMClient) -> pd.DataFrame:
     if news.empty:
         return pd.DataFrame(columns=EVENT_OUTPUT_COLUMNS)
     missing = {"published_at", "title"}.difference(news.columns)
@@ -96,14 +108,9 @@ def extract_news_events(news: pd.DataFrame, config: dict[str, Any], client: LLMC
 
     records = news.reset_index(drop=True).to_dict("records")
     max_workers = max(1, int(config.get("llm", {}).get("max_concurrency", 1)))
-    if client.mock_mode or max_workers == 1:
-        rows = [_extract_one(index, article, config, client) for index, article in enumerate(records)]
-    else:
-        rows = []
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(_extract_one, index, article, config, client): index for index, article in enumerate(records)}
-            for future in as_completed(futures):
-                rows.append(future.result())
+    semaphore = asyncio.Semaphore(max_workers)
+    tasks = [_extract_one(index, article, config, client, semaphore) for index, article in enumerate(records)]
+    rows = await asyncio.gather(*tasks)
     rows = [row for row in rows if row]
     out = pd.DataFrame(rows, columns=EVENT_OUTPUT_COLUMNS)
     if out.empty:
@@ -112,7 +119,50 @@ def extract_news_events(news: pd.DataFrame, config: dict[str, Any], client: LLMC
     return out.sort_values(["published_at", "source"]).reset_index(drop=True)
 
 
-def _extract_one(index: int, article: dict[str, Any], config: dict[str, Any], client: LLMClient) -> dict[str, Any] | None:
+def select_unprocessed_news(
+    raw_news: pd.DataFrame,
+    existing_events: pd.DataFrame,
+    recent_first: bool = True,
+) -> pd.DataFrame:
+    """Return raw news rows whose news_id has not been converted into events."""
+    if raw_news.empty:
+        return raw_news.copy()
+    out = raw_news.copy()
+    if "news_id" in out and existing_events is not None and not existing_events.empty and "news_id" in existing_events:
+        processed = set(existing_events["news_id"].dropna().astype(str))
+        out = out[~out["news_id"].astype(str).isin(processed)].copy()
+    if recent_first and "published_at" in out:
+        out["published_at"] = pd.to_datetime(out["published_at"], errors="coerce")
+        out = out.sort_values("published_at", ascending=False).copy()
+    return out.reset_index(drop=True)
+
+
+def merge_news_events(existing_events: pd.DataFrame, new_events: pd.DataFrame) -> pd.DataFrame:
+    """Append newly extracted events while preserving existing event history."""
+    frames = []
+    if existing_events is not None and not existing_events.empty:
+        frames.append(existing_events)
+    if new_events is not None and not new_events.empty:
+        frames.append(new_events)
+    if not frames:
+        return pd.DataFrame(columns=EVENT_OUTPUT_COLUMNS)
+    out = pd.concat(frames, ignore_index=True)
+    for column in EVENT_OUTPUT_COLUMNS:
+        if column not in out:
+            out[column] = pd.NA
+    out["published_at"] = pd.to_datetime(out["published_at"], errors="coerce")
+    out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.normalize()
+    out = out.drop_duplicates(subset=["news_id"], keep="last")
+    return out[EVENT_OUTPUT_COLUMNS].sort_values(["published_at", "source"]).reset_index(drop=True)
+
+
+async def _extract_one(
+    index: int,
+    article: dict[str, Any],
+    config: dict[str, Any],
+    client: LLMClient,
+    semaphore: asyncio.Semaphore,
+) -> dict[str, Any] | None:
     published_at = pd.to_datetime(article.get("published_at"), utc=True, errors="coerce")
     if pd.isna(published_at):
         return None
@@ -124,7 +174,8 @@ def _extract_one(index: int, article: dict[str, Any], config: dict[str, Any], cl
         "extraction_error": "",
     }
     try:
-        event = _extract_with_retries(str(article.get("title", "")), str(article.get("summary", "")), config, client)
+        async with semaphore:
+            event = await _extract_with_retries_async(str(article.get("title", "")), str(article.get("summary", "")), config, client)
         row = event.to_dict()
         row.update(base)
         return row
@@ -153,6 +204,18 @@ def _extract_with_retries(title: str, summary: str, config: dict[str, Any], clie
     for _ in range(attempts):
         try:
             return extract_event(title, summary, config, client)
+        except Exception as exc:  # noqa: BLE001 - caller records final failure.
+            last_exc = exc
+    assert last_exc is not None
+    raise last_exc
+
+
+async def _extract_with_retries_async(title: str, summary: str, config: dict[str, Any], client: LLMClient) -> GoldNewsEvent:
+    attempts = max(1, int(config.get("llm", {}).get("max_retries", 1)))
+    last_exc: Exception | None = None
+    for _ in range(attempts):
+        try:
+            return await extract_event_async(title, summary, config, client)
         except Exception as exc:  # noqa: BLE001 - caller records final failure.
             last_exc = exc
     assert last_exc is not None
