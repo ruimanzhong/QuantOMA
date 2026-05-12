@@ -25,6 +25,26 @@ def _nearest_expiry_slice(chain: pd.DataFrame) -> pd.DataFrame:
     return chain.loc[chain["expiry"] == expiry].copy()
 
 
+def _expiry_bucket_slice(
+    chain: pd.DataFrame,
+    min_dte: int | float | None,
+    max_dte: int | float | None,
+    fallback_to_nearest: bool = True,
+) -> pd.DataFrame:
+    if chain.empty:
+        return chain
+    out = chain.copy()
+    dte = pd.to_numeric(out["dte"], errors="coerce")
+    if min_dte is not None:
+        out = out[dte >= float(min_dte)]
+        dte = pd.to_numeric(out["dte"], errors="coerce")
+    if max_dte is not None:
+        out = out[dte <= float(max_dte)]
+    if out.empty and fallback_to_nearest:
+        return _nearest_expiry_slice(chain)
+    return _nearest_expiry_slice(out)
+
+
 def _row_by_delta_or_moneyness(
     rows: pd.DataFrame,
     target_delta: float | None,
@@ -72,21 +92,38 @@ def generate_directional_candidates(
     config: dict[str, Any] | None = None,
 ) -> list[OptionStrategyCandidate]:
     cfg = config or {}
-    expiry_chain = _nearest_expiry_slice(chain)
-    calls = expiry_chain[expiry_chain["option_type"] == "call"].sort_values("strike")
-    puts = expiry_chain[expiry_chain["option_type"] == "put"].sort_values("strike")
+    expiry_cfg = cfg.get("expiry_selection", {})
+    trend_chain = _expiry_bucket_slice(
+        chain,
+        min_dte=expiry_cfg.get("trend_min_dte", 25),
+        max_dte=expiry_cfg.get("trend_max_dte", 60),
+    )
+    hedge_chain = _expiry_bucket_slice(
+        chain,
+        min_dte=expiry_cfg.get("hedge_min_dte", 20),
+        max_dte=expiry_cfg.get("hedge_max_dte", 45),
+    )
+    calls = trend_chain[trend_chain["option_type"] == "call"].sort_values("strike")
+    puts = hedge_chain[hedge_chain["option_type"] == "put"].sort_values("strike")
     candidates: list[OptionStrategyCandidate] = []
 
     bullish_threshold = float(cfg.get("bullish_threshold", 0.60))
+    strong_bullish_threshold = float(cfg.get("strong_bullish_threshold", 0.65))
     bearish_threshold = float(cfg.get("bearish_threshold", 0.40))
     prefer_spreads = bool(cfg.get("prefer_spreads", True))
+    iv_is_high = cfg.get("volatility_state") == "high_iv"
 
     if p_up >= bullish_threshold and not calls.empty:
         buy_row = _row_by_delta_or_moneyness(calls, target_delta=float(cfg.get("call_buy_target_delta", 0.45)))
         if buy_row is not None:
             buy_leg = OptionLeg(row_to_contract(buy_row), "buy", 1)
-            if not prefer_spreads:
-                candidates.append(_candidate("long_call", [buy_leg], "bullish_probability_long_call"))
+            diagnostics = {
+                "expiry_bucket": "trend",
+                "signal_horizon_days": cfg.get("signal_horizon_days", 5),
+                "selected_dte": int(buy_row["dte"]),
+            }
+            if not prefer_spreads and p_up >= strong_bullish_threshold and not iv_is_high:
+                candidates.append(_candidate("long_call", [buy_leg], "strong_bullish_probability_long_call", diagnostics))
             sell_row = _row_by_delta_or_moneyness(
                 calls,
                 target_delta=float(cfg.get("call_sell_target_delta", 0.25)),
@@ -98,14 +135,25 @@ def generate_directional_candidates(
                         "bull_call_spread",
                         [buy_leg, OptionLeg(row_to_contract(sell_row), "sell", 1)],
                         "bullish_probability_defined_risk_call_spread",
+                        {
+                            **diagnostics,
+                            "sell_dte": int(sell_row["dte"]),
+                            "preferred_first_version_strategy": True,
+                        },
                     )
                 )
-            candidates.append(_candidate("long_call", [buy_leg], "bullish_probability_long_call_fallback"))
+            if p_up >= strong_bullish_threshold and not iv_is_high:
+                candidates.append(_candidate("long_call", [buy_leg], "strong_bullish_probability_long_call_fallback", diagnostics))
 
     if p_up <= bearish_threshold and not puts.empty:
         buy_row = _row_by_delta_or_moneyness(puts, target_delta=float(cfg.get("put_buy_target_delta", -0.45)))
         if buy_row is not None:
             buy_leg = OptionLeg(row_to_contract(buy_row), "buy", 1)
+            diagnostics = {
+                "expiry_bucket": "hedge",
+                "signal_horizon_days": cfg.get("signal_horizon_days", 5),
+                "selected_dte": int(buy_row["dte"]),
+            }
             sell_row = _row_by_delta_or_moneyness(
                 puts,
                 target_delta=float(cfg.get("put_sell_target_delta", -0.25)),
@@ -117,9 +165,10 @@ def generate_directional_candidates(
                         "bear_put_spread",
                         [buy_leg, OptionLeg(row_to_contract(sell_row), "sell", 1)],
                         "bearish_probability_defined_risk_put_spread",
+                        diagnostics,
                     )
                 )
-            candidates.append(_candidate("long_put", [buy_leg], "bearish_probability_long_put_fallback"))
+            candidates.append(_candidate("long_put", [buy_leg], "bearish_probability_long_put_fallback", diagnostics))
 
     return candidates
 
@@ -177,7 +226,12 @@ def generate_call_put_combo_candidates(
     if not _should_generate_call_put_combo(p_up, vol_state, event_risk, cfg):
         return []
 
-    expiry_chain = _nearest_expiry_slice(chain)
+    expiry_cfg = cfg.get("expiry_selection", {})
+    expiry_chain = _expiry_bucket_slice(
+        chain,
+        min_dte=expiry_cfg.get("event_min_dte", 10),
+        max_dte=expiry_cfg.get("event_max_dte", 30),
+    )
     calls = expiry_chain[expiry_chain["option_type"] == "call"].sort_values("strike")
     puts = expiry_chain[expiry_chain["option_type"] == "put"].sort_values("strike")
     if calls.empty or puts.empty:
@@ -199,7 +253,13 @@ def generate_call_put_combo_candidates(
                     "long_straddle",
                     [OptionLeg(row_to_contract(call_row), "buy", 1), OptionLeg(row_to_contract(put_row), "buy", 1)],
                     "call_put_combo_long_straddle",
-                    {"event_risk": bool(event_risk), "combo_type": "straddle"},
+                    {
+                        "event_risk": bool(event_risk),
+                        "combo_type": "straddle",
+                        "expiry_bucket": "event",
+                        "signal_horizon_days": cfg.get("signal_horizon_days", 5),
+                        "selected_dte": int(call_row["dte"]),
+                    },
                 )
             )
 
@@ -220,7 +280,13 @@ def generate_call_put_combo_candidates(
                     "long_strangle",
                     [OptionLeg(row_to_contract(call_row), "buy", 1), OptionLeg(row_to_contract(put_row), "buy", 1)],
                     "call_put_combo_long_strangle",
-                    {"event_risk": bool(event_risk), "combo_type": "strangle"},
+                    {
+                        "event_risk": bool(event_risk),
+                        "combo_type": "strangle",
+                        "expiry_bucket": "event",
+                        "signal_horizon_days": cfg.get("signal_horizon_days", 5),
+                        "selected_dte": int(call_row["dte"]),
+                    },
                 )
             )
 
@@ -257,6 +323,7 @@ def generate_option_candidates(
         return []
     cfg = config or {}
     candidates: list[OptionStrategyCandidate] = []
-    candidates.extend(generate_directional_candidates(chain, p_up, cfg))
+    directional_cfg = {**cfg, "volatility_state": vol_state.get("volatility_state")}
+    candidates.extend(generate_directional_candidates(chain, p_up, directional_cfg))
     candidates.extend(generate_call_put_combo_candidates(chain, p_up, vol_state, event_risk, cfg))
     return candidates

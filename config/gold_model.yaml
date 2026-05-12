@@ -145,6 +145,55 @@ live_overlay:
     bearish_spread_threshold: 0.30
     bearish_multiplier: 0.85
 
+options:
+  enabled: false
+  signal_horizon_days: 5
+  chain_path: null
+  default_multiplier: 1000.0
+  account_equity: 100000.0
+  expiry_selection:
+    trend_min_dte: 25
+    trend_max_dte: 60
+    event_min_dte: 10
+    event_max_dte: 30
+    hedge_min_dte: 20
+    hedge_max_dte: 45
+  holding:
+    max_holding_days: 5
+    reevaluate_daily: true
+    close_on_signal_flip: true
+    close_on_edge_decay: true
+  exits:
+    long_option_take_profit_pct: 0.40
+    long_option_stop_loss_pct: 0.35
+    spread_take_profit_of_max_profit: 0.50
+    spread_stop_loss_of_max_loss: 0.35
+    signal_flip_probability: 0.52
+    theta_to_premium_exit_threshold: 0.08
+  risk:
+    max_account_leverage: 2.0
+    max_delta_notional_multiplier: 2.0
+    max_gross_notional_multiplier: null
+    max_premium_risk_pct: 0.08
+    max_single_trade_loss_pct: 0.03
+    allow_naked_short_options: false
+    allow_credit_spreads: false
+  chain_filter:
+    min_dte: 10
+    max_dte: 90
+    min_volume: 0
+    min_open_interest: 0
+    max_bid_ask_spread_pct: 0.20
+  strategy:
+    bullish_threshold: 0.60
+    strong_bullish_threshold: 0.65
+    bearish_threshold: 0.40
+    prefer_spreads: true
+    allow_call_put_combinations: true
+    combo_probability_lower: 0.45
+    combo_probability_upper: 0.55
+    combo_requires_low_iv_or_event: true
+
 backtest:
   signal_threshold: 0.55
   transaction_cost_bps: 2.0

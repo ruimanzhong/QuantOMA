@@ -14,6 +14,7 @@ from market_quant.options.volatility import build_option_vol_state
 
 DEFAULT_OPTIONS_CONFIG: dict[str, Any] = {
     "enabled": False,
+    "signal_horizon_days": 5,
     "account_equity": 100000.0,
     "risk_free_rate": 0.02,
     "risk": {
@@ -34,8 +35,31 @@ DEFAULT_OPTIONS_CONFIG: dict[str, Any] = {
         "min_open_interest": 0,
         "max_bid_ask_spread_pct": 0.20,
     },
+    "expiry_selection": {
+        "trend_min_dte": 25,
+        "trend_max_dte": 60,
+        "event_min_dte": 10,
+        "event_max_dte": 30,
+        "hedge_min_dte": 20,
+        "hedge_max_dte": 45,
+    },
+    "holding": {
+        "max_holding_days": 5,
+        "reevaluate_daily": True,
+        "close_on_signal_flip": True,
+        "close_on_edge_decay": True,
+    },
+    "exits": {
+        "long_option_take_profit_pct": 0.40,
+        "long_option_stop_loss_pct": 0.35,
+        "spread_take_profit_of_max_profit": 0.50,
+        "spread_stop_loss_of_max_loss": 0.35,
+        "signal_flip_probability": 0.52,
+        "theta_to_premium_exit_threshold": 0.08,
+    },
     "strategy": {
         "bullish_threshold": 0.60,
+        "strong_bullish_threshold": 0.65,
         "bearish_threshold": 0.40,
         "neutral_lower": 0.45,
         "neutral_upper": 0.55,
@@ -118,6 +142,9 @@ def _serialize_plan(plan, config: dict[str, Any]) -> dict[str, Any]:
         "enabled": bool(plan.enabled),
         "strategy_type": plan.strategy_type,
         "reason": plan.reason,
+        "signal_horizon_days": int(config.get("signal_horizon_days", 5)),
+        "holding": config.get("holding", {}),
+        "exits": config.get("exits", {}),
         "account_equity": float(config.get("account_equity", 100000.0)),
         "max_account_leverage": float(config.get("risk", {}).get("max_account_leverage", 2.0)),
         "premium": float(plan.premium),
@@ -177,18 +204,28 @@ def build_live_option_plan(
     )
     probability = float(_get_signal_value(gold_signal, "probability", 0.5))
     event_risk = _infer_event_risk(gold_signal, cfg)
+    strategy_cfg = _deep_merge(
+        cfg.get("strategy", {}),
+        {
+            "expiry_selection": cfg.get("expiry_selection", {}),
+            "signal_horizon_days": cfg.get("signal_horizon_days", 5),
+        },
+    )
     candidates = generate_option_candidates(
         chain,
         p_up=probability,
         vol_state=vol_state,
         event_risk=event_risk,
-        config=cfg.get("strategy", {}),
+        config=strategy_cfg,
     )
     if not candidates:
         return {
             "enabled": False,
             "strategy_type": "no_trade",
             "reason": "no_strategy_candidate_for_current_signal_state",
+            "signal_horizon_days": int(cfg.get("signal_horizon_days", 5)),
+            "holding": cfg.get("holding", {}),
+            "exits": cfg.get("exits", {}),
             "diagnostics": {
                 "probability": probability,
                 "event_risk": event_risk,
@@ -206,6 +243,10 @@ def build_live_option_plan(
         config=selector_cfg,
     )
     serialized = _serialize_plan(plan, cfg)
+    if not serialized.get("enabled", False):
+        serialized.setdefault("signal_horizon_days", int(cfg.get("signal_horizon_days", 5)))
+        serialized.setdefault("holding", cfg.get("holding", {}))
+        serialized.setdefault("exits", cfg.get("exits", {}))
     serialized.setdefault("diagnostics", {})
     serialized["diagnostics"].update(
         {
